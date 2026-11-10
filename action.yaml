@@ -1,0 +1,65 @@
+name: Disable Docker containerd image store
+description: Turn off Docker's containerd image store (default since Engine 29) and restart dockerd, for tools like Buildpacks.
+author: betPawa
+branding:
+  icon: package
+  color: blue
+outputs:
+  docker-version:
+    description: Docker server version after the change
+    value: ${{ steps.disable.outputs.docker-version }}
+  storage-driver:
+    description: Storage driver in use after the change (e.g. overlay2)
+    value: ${{ steps.disable.outputs.storage-driver }}
+  restarted:
+    description: Whether dockerd was restarted (false if the containerd image store was already off)
+    value: ${{ steps.disable.outputs.restarted }}
+runs:
+  using: composite
+  steps:
+    - id: disable
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        if [ "$RUNNER_OS" != "Linux" ] || ! command -v systemctl > /dev/null; then
+          echo "::error::This action needs a Linux runner with a systemd-managed Docker daemon"
+          exit 1
+        fi
+        if ! command -v jq > /dev/null; then
+          echo "::error::jq is required but not installed"
+          exit 1
+        fi
+
+        uses_containerd() {
+          docker info -f '{{ range .DriverStatus }}{{ index . 1 }} {{ end }}' | grep -q 'io.containerd.snapshotter'
+        }
+
+        restarted=false
+
+        if ! uses_containerd; then
+          echo "Docker already uses the classic image store, nothing to change"
+        else
+          cfg=/etc/docker/daemon.json
+          sudo mkdir -p /etc/docker
+          [ -s "$cfg" ] || echo '{}' | sudo tee "$cfg" > /dev/null
+          sudo jq '.features."containerd-snapshotter" = false' "$cfg" | sudo tee "$cfg.new" > /dev/null
+          sudo mv "$cfg.new" "$cfg"
+          sudo systemctl restart docker
+          restarted=true
+
+          if uses_containerd; then
+            echo "::error::Docker still uses the containerd image store after restart"
+            exit 1
+          fi
+        fi
+
+        version=$(docker info -f '{{ .ServerVersion }}')
+        driver=$(docker info -f '{{ .Driver }}')
+        echo "Docker $version, storage driver $driver, restarted=$restarted"
+
+        {
+          echo "docker-version=$version"
+          echo "storage-driver=$driver"
+          echo "restarted=$restarted"
+        } >> "$GITHUB_OUTPUT"
