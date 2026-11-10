@@ -1,6 +1,5 @@
 name: Disable Docker containerd image store
 description: Turn off Docker's containerd image store (default since Engine 29) and restart dockerd, for tools like Buildpacks.
-author: betPawa
 branding:
   icon: package
   color: blue
